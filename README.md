@@ -67,10 +67,11 @@ main.cpp (CLI)                                    -- interface layer
 tests/test_inventory.cpp                          -- testing
 ```
 
-See `docs/class_diagram.png` for the full class diagram (proper UML
-notation: composition, association, dependency -- no inheritance anywhere,
-since nothing in this design inherits from anything) and
-`docs/sequence_diagram.png` for a recorded-transaction / auto-save
+See `docs/architecture_diagram.png` for the layered module view above drawn
+out as a diagram, `docs/class_diagram.png` for the full class diagram
+(proper UML notation: composition, association, dependency -- no
+inheritance anywhere, since nothing in this design inherits from anything)
+and `docs/sequence_diagram.png` for a recorded-transaction / auto-save
 interaction sequence.
 
 ## Build & run
