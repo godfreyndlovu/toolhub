@@ -6,7 +6,7 @@ Smart Inventory Management System.
 
 Godfrey Ndlovu -- Matriculation No. 92131458
 
-## Problem, purpose, solution ♟️🧩
+## Problem, purpose, solution ♟️
 
 Small shops routinely lose track of stock through manual methods -- a paper
 ledger or a spreadsheet nobody updates consistently -- which leads to running
@@ -57,7 +57,7 @@ persisted within a few seconds even if the user forgets to choose
 "Save & exit". See `docs/sequence_diagram.png` for the full interaction,
 and CODEBOOK.md for why this was added.
 
-## Architecture🖥️
+## Architecture 🖥️
 
 ```
 Product, Supplier, Transaction, TransactionLog   -- data layer
@@ -74,7 +74,7 @@ inheritance anywhere, since nothing in this design inherits from anything)
 and `docs/sequence_diagram.png` for a recorded-transaction / auto-save
 interaction sequence.
 
-## Build & run⚙️
+## Build & run ⚙️
 
 Requires a C++17 compiler, CMake 3.10+, and a threading library (pthreads on
 Linux/macOS; native threads on Windows via MSVC). No other external
@@ -91,7 +91,7 @@ On Windows/Visual Studio, open the folder or generated solution and build
 the `toolhub` and `toolhub_tests` targets from there; the same CMakeLists.txt
 is used.
 
-## Menu reference📱
+## Menu reference📱📲
 
 ```
  1) Add product              8) Remove supplier
@@ -103,7 +103,7 @@ is used.
  7) Edit supplier             0) Save & exit
 ```
 
-## Seed data📱
+## Seed data 👾
 
 On first run, if no `inventory.dat` exists, the application starts
 genuinely empty -- it does not auto-populate any data. For demonstration and
