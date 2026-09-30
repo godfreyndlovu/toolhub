@@ -1,9 +1,7 @@
-#ifndef SHOPTRACK_SUPPLIER_H
-#define SHOPTRACK_SUPPLIER_H
+#pragma once
 
 #include <string>
 
-// Represents a supplier. Owned by std::vector<Supplier> in InventoryManager.
 class Supplier {
 public:
     Supplier() = default;
@@ -13,10 +11,11 @@ public:
     const std::string& name() const { return name_; }
     const std::string& contact() const { return contact_; }
 
+    void setName(const std::string& name) { name_ = name; }
+    void setContact(const std::string& contact) { contact_ = contact; }
+
 private:
     int id_ = 0;
     std::string name_;
     std::string contact_;
 };
-
-#endif // SHOPTRACK_SUPPLIER_H

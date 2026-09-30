@@ -1,9 +1,8 @@
-﻿build/
-out/
-build_toolhub
-build_tests
+build/
+toolhub_tests
 inventory.dat
 *.o
 .vscode/
 .idea/
 .vs/
+out/

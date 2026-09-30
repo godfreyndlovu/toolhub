@@ -1,15 +1,17 @@
-#ifndef SHOPTRACK_PRODUCT_H
-#define SHOPTRACK_PRODUCT_H
+#pragma once
 
 #include <string>
 
-// Represents a single stocked item. Owned by std::vector<Product> in
-// InventoryManager (RAII — no manual allocation needed here).
+// A stocked item. Quantity only ever changes through InventoryManager's
+// transaction path (recordTransaction / adjustQuantity), never directly via
+// editProduct -- this is a deliberate design decision so that every quantity
+// change is accompanied by a Transaction record (see CODEBOOK.md).
 class Product {
 public:
     Product() = default;
     Product(int id, std::string name, std::string category, int quantity,
-            double sellingPrice, double costPrice, int reorderThreshold, int supplierId);
+             double sellingPrice, double costPrice, int reorderThreshold,
+             int supplierId);
 
     int id() const { return id_; }
     const std::string& name() const { return name_; }
@@ -27,11 +29,9 @@ public:
     void setReorderThreshold(int threshold) { reorderThreshold_ = threshold; }
     void setSupplierId(int supplierId) { supplierId_ = supplierId; }
 
-    // Applies a transaction delta (positive = restock, negative = sale).
-    // Returns false if the change would take quantity below zero.
+    // Returns false (and leaves quantity unchanged) if delta would push
+    // quantity below zero.
     bool adjustQuantity(int delta);
-
-    bool isBelowThreshold() const { return quantity_ <= reorderThreshold_; }
 
 private:
     int id_ = 0;
@@ -41,7 +41,5 @@ private:
     double sellingPrice_ = 0.0;
     double costPrice_ = 0.0;
     int reorderThreshold_ = 0;
-    int supplierId_ = 0;
+    int supplierId_ = 0; // 0 == no supplier
 };
-
-#endif // SHOPTRACK_PRODUCT_H

@@ -1,178 +1,218 @@
-# ToolHub — Code Book
+# CODEBOOK
 
-This document describes the data structures, memory model, and on-disk
-file format in detail, as required alongside the README for Phase 2
-reproducibility and transparency.
+Technical reference for ToolHub's data structures, memory model, file
+format, and the design decisions behind them. Read alongside README.md
+(build/run/menu) and `docs/class_diagram.png` / `docs/sequence_diagram.png`.
 
 ## Data structures
 
 | Structure | Type | Why |
 |---|---|---|
-| Products | `std::vector<Product>` | Random access, search, sort, in-place edit — the pattern `std::vector` is built for |
-| Suppliers | `std::vector<Supplier>` | Same access pattern as products, much smaller in practice |
-| Product id → index | `std::unordered_map<int, size_t>` | O(1) lookup by id for edit/remove/find, avoiding a linear scan on every operation |
-| Transaction history | `TransactionLog` (hand-built singly linked list, raw pointers) | Append-only, sequential-read access — chosen to demonstrate manual pointer/memory management deliberately, not because `std::vector` is inadequate for this access pattern (a vector would also work well here) |
+| Products | `std::vector<Product>` + `unordered_map<int,size_t>` id-index (conceptually; current implementation does a linear scan, documented below) | Random-access, search/sort/edit pattern; RAII-managed, no manual allocation |
+| Suppliers | `std::vector<Supplier>` | Same access pattern, smaller collection |
+| Transaction history | Hand-built singly linked list (`TransactionLog`), raw pointers | See "Why a linked list" below |
 
-## Memory model
+Note on lookup: `InventoryManager` currently performs a linear scan
+(`findProductIndexLocked` / `findSupplierIndexLocked`) rather than
+maintaining a separate `unordered_map<int,size_t>` id-index. For the data
+volumes this project targets (a small shop's catalogue), this is O(n) but
+fast in practice; the map-based index remains a documented, straightforward
+future optimisation if the collection size ever became large enough to
+matter, without changing any public method signature.
 
-- **Products and suppliers**: fully RAII-managed via `std::vector`. No
-  manual allocation, no raw pointers, no owner ambiguity.
-- **TransactionLog**: owns every `TransactionNode*` it allocates via
-  `new`. The destructor walks the chain and calls `delete` on each
-  node. Copy construction and copy assignment perform a **deep copy**
-  (traversing the source list and re-appending each transaction) —
-  a shallow copy of the raw `next` pointers would cause two
-  `TransactionLog` instances to free the same nodes, a double-free,
-  when both are destroyed. This is the rule-of-three implementation:
-  destructor, copy constructor, copy assignment operator, all
-  consistent with each other.
-- **Relationships between entities** (Product → Supplier, Transaction →
-  Product) are expressed as plain `int` ids, resolved at the point of
-  use via the id→index map — not as pointers between structs. This
-  avoids dangling references if a `std::vector` reallocates its
-  internal buffer.
+## Why a linked list for TransactionLog
 
-## File format: `inventory.dat`
+Transaction history is append-only and read sequentially -- a pattern
+`std::vector` would also serve well, and would in fact be simpler and
+marginally more cache-efficient. The linked list is chosen **specifically**
+to exercise dynamic memory allocation, pointer traversal, ownership, and
+manual destruction in C++ -- the module's core memory-model competency --
+rather than because it is technically necessary. This is a deliberate
+demonstration, not a claim that a vector "wouldn't fit."
 
-Plain text, pipe-delimited, three labelled sections. Example:
+`TransactionLog` owns every node it allocates via `new`:
+- **Destructor** walks the chain and `delete`s each node.
+- **Copy constructor / copy assignment** deep-copy the chain (rule of
+  three), so two independently destroyed logs never double-free a shared
+  node.
+- **`append`** is O(1) via a tracked tail pointer.
+- **`removeLast`** (added to support undo) is O(n) -- a singly linked list
+  has no way to reach the second-to-last node without a walk. This is
+  acceptable because undo is a rare, single-shot operation, not a hot path.
 
-```
-[PRODUCTS]
-1|Claw hammer|Tools|8.50|5.00|24|5|1
-[SUPPLIERS]
-1|Acme Hardware Ltd|acme@example.com
-[TRANSACTIONS]
-1|1|OUT|3|2026-09-10T14:02|Counter sale
-```
+Verified by `test_transaction_log_append_and_copy` and
+`test_transaction_log_remove_last`.
 
-**`[PRODUCTS]` field order:**
-`id | name | category | sellingPrice | costPrice | quantity | reorderThreshold | supplierId`
+## Relationships
 
-**`[SUPPLIERS]` field order:**
-`id | name | contact`
-
-**`[TRANSACTIONS]` field order:**
-`id | productId | type (IN/OUT) | quantity | timestamp | note`
-
-Quantity in the transaction section is always **non-negative**; the
-`type` field carries direction. This was changed from an earlier
-signed-delta design specifically so the file is unambiguous to read by
-eye and doesn't rely on a sign convention agreeing with the `type`
-field (see "Changes from Phase 1" below).
-
-**Parsing behaviour** (`file_handler.cpp`):
-- A missing file is treated as a first run — the app starts with empty
-  containers rather than failing.
-- A line with the wrong number of fields for its section, or a field
-  that fails to parse as a number, is **skipped**, not fatal — the
-  rest of the file still loads. This is covered by
-  `test_persistence_round_trip_and_malformed_line` in the test suite.
-- Loading also advances the in-memory `next...Id` counters past the
-  highest id seen in the file, so newly added records after a reload
-  never collide with existing ids.
-- Removing a product does **not** remove its historical transactions.
-  They remain in `TransactionLog`, referencing a `productId` that may
-  no longer resolve to a live product — a deliberate audit-trail
-  decision, covered by
-  `test_removed_product_keeps_historical_transactions`.
-
-## Changes from the Phase 1 conception-phase proposal
-
-Per the assignment's instruction to document any changes from the
-conception-phase proposal:
-
-1. **Supplier management scope reduced.** The Phase 1 document listed
-   full supplier CRUD as baseline. The assignment brief's "at minimum"
-   list does not include it — only products, transactions, search/sort,
-   one report, and persistence are baseline — and lists supplier
-   management explicitly as an optional extension. The data model still
-   stores suppliers and links each product to one (`supplierId`), but
-   only `addSupplier` is implemented; edit/remove supplier are not part
-   of this implementation.
-
-2. **Reorder-forecast report replaced with a low-stock report.** Phase 1
-   proposed a forecast that estimated days-until-stockout from
-   transaction velocity. This added implementation and testing
-   complexity (defining "urgency," choosing a consumption window,
-   handling insufficient history) disproportionate to its weight in
-   the grading criteria. The implemented baseline report instead ranks
-   products at or below their reorder threshold by shortfall
-   (`reorderThreshold - quantity`), which is simpler, fully specified,
-   and still ranks by urgency rather than a flat yes/no flag.
-
-3. **Transaction quantity convention changed from a signed delta to
-   `type` + non-negative `quantity`.** This matches the submitted
-   Phase 1 document's file-format table and removes any ambiguity
-   between a transaction's direction and its magnitude.
-
-4. **`TransactionLog`'s justification reworded.** Phase 1 stated a
-   `std::vector` "wouldn't fit" the transaction-history access pattern.
-   That overstates the case — a vector would work fine for append-only,
-   sequential-read data. The linked list is used because it deliberately
-   demonstrates the module's pointer/memory-management competency, not
-   because it's technically necessary.
-
-5. **`Product` gained a `costPrice` field**, matching the Phase 1
-   file-format table, which included a Cost column not present in the
-   original entity description.
+- `Product.supplierId` is an integer id referencing a `Supplier`, not a raw
+  pointer between structs. This avoids dangling references if
+  `std::vector<Product>`/`std::vector<Supplier>` reallocates its internal
+  buffer (which invalidates pointers and iterators but never invalidates an
+  id). A `supplierId` of 0 means "no supplier."
+- `Transaction.productId` is likewise an integer id, not a pointer, for the
+  same reason, and also so that a transaction can continue to reference a
+  product that has since been removed (see "Design decision: deletion and
+  audit trail").
+- Cardinalities (see `docs/class_diagram.png`): one `Supplier` to many
+  `Product`s; one `Product` to many `Transaction`s; `InventoryManager`
+  composes (owns) its `Product`/`Supplier` collections and its single
+  `TransactionLog`.
 
 ## Design decision: what `editProduct` covers
 
-`editProduct` updates name, category, selling price, cost price, reorder
-threshold, and supplier id — every field except **quantity**. This is
-deliberate, not an oversight: quantity changes only through
-`recordTransaction`, so `TransactionLog` remains the single source of
-truth for every stock movement. If `editProduct` could also silently
-change quantity, a product's stock level could drift from its
-transaction history with no record of why, which would undermine the
-audit-trail design decision documented above. To correct a wrong
-quantity in practice, record a stock-in or stock-out transaction with
-a note explaining the correction (e.g. "stocktake adjustment") — this
-keeps the change visible in the transaction history report rather than
-silent. Covered by `test_edit_product_updates_all_editable_fields` in
-the test suite, which asserts every listed field updates correctly and
-that quantity is unaffected.
+`editProduct` updates name, category, sellingPrice, costPrice,
+reorderThreshold, and supplierId -- every editable field **except**
+quantity. Quantity changes exclusively through `recordTransaction` (and its
+inverse, `undoLastTransaction`), so every quantity change is always
+accompanied by a `Transaction` record. This is deliberate: allowing
+`editProduct` to silently change quantity would create stock movements with
+no corresponding audit-trail entry, which defeats the purpose of keeping a
+transaction history at all.
 
-## Phase 3 hardening: persistence and input validation
+## Design decision: deletion and audit trail
 
-Per the assignment's finalization-phase instruction to "harden
-persistence and input validation," three concrete changes were made
-to the Phase 2 implementation:
+Removing a product does not delete its historical transactions -- they
+remain as an audit trail. `Transaction.productId` continues to reference the
+now-nonexistent product id; `Reports::transactionHistoryReport` displays
+these rows using a `(deleted product #id)` placeholder name rather than
+omitting them or crashing. Verified by
+`test_removed_product_keeps_historical_transactions`.
 
-1. **Atomic saves.** `FileHandler::saveToFile` previously wrote
-   directly to `inventory.dat` with `std::ios::trunc`, which truncates
-   the file *before* writing the new content. If the write failed
-   partway through (disk full, power loss, the process being killed),
-   the existing data would already be gone, replaced by a partial,
-   corrupted file. It now writes the full new content to a temporary
-   file (`inventory.dat.tmp`) first, and only replaces the original via
-   `std::rename` once that write has fully succeeded and the stream
-   reports no error. `std::rename` is atomic on both POSIX and Windows
-   when source and destination share a volume, so the original file is
-   never left in a half-written state — a failed save now fails
-   cleanly, leaving the last good version intact, rather than silently
-   destroying it.
+The same principle applies to suppliers: removing a supplier does not
+remove or orphan the products that reference it. Instead, every product
+whose `supplierId` matched the removed supplier is reset to 0 ("no
+supplier"), so no product is ever left pointing at a supplier id that no
+longer exists. Verified by
+`test_supplier_edit_and_remove_resets_product_reference`.
 
-2. **Supplier-id validation.** `addProduct` and `editProduct` previously
-   accepted any non-negative integer as a product's `supplierId`,
-   including ids that didn't correspond to any supplier that had
-   actually been added. That let a product silently reference a
-   supplier that doesn't exist, with no error and no way to notice
-   short of manually cross-checking the file. Both methods now reject
-   the operation (returning `-1` / `false`) unless the id is `0`
-   ("no supplier") or matches a real, currently-known supplier, via the
-   new `supplierExists()` check. The CLI's edit flow now also lists
-   known suppliers before prompting, matching the add-product flow.
+## Design decision: undo is single-level
 
-3. **Malformed-line visibility.** `loadFromFile` already skipped
-   malformed lines rather than aborting the whole load, but did so
-   silently — a corrupted file could lose data with no indication
-   anything had gone wrong. It now counts every skipped line and
-   reports the count via `InventoryManager::malformedLinesSkipped()`;
-   the CLI prints a one-line warning on startup if that count is
-   greater than zero, so data loss is visible rather than silent.
+`undoLastTransaction` reverses only the single most recent transaction, not
+an arbitrary depth of history. This is a deliberate scope decision: a full
+undo/redo stack would require either replaying the entire transaction log to
+reconstruct intermediate states, or storing per-transaction snapshots,
+neither of which is justified by the assignment's requirements. Single-level
+undo directly answers "I made a mistake, reverse it" -- the common case --
+without that added complexity. If the referenced product has since been
+removed, the transaction record is still removed (undo always succeeds when
+there is a transaction to undo); there is simply no quantity left to
+reverse. Verified by `test_undo_last_transaction_reverses_quantity` and
+`test_undo_with_deleted_product_still_removes_transaction`.
 
-All three are covered by dedicated tests: `test_supplier_id_validation`
-and `test_malformed_lines_are_counted`, alongside the existing
-`test_persistence_round_trip_and_malformed_line`. The test suite now
-totals 13 tests, up from 11 at the end of Phase 2.
+## Scope extension: responding to conception-phase review
+
+The Phase 1 conception document was reviewed and found too narrow in scope
+for the assignment's expectations -- the original baseline kept supplier
+management, undo, and any concurrency mechanism as merely optional
+extensions, in the interest of protecting implementation quality. In
+response, three items were promoted from "optional" to "implemented
+baseline":
+
+1. **Full supplier management** (edit/remove, not just add) -- cheap to
+   complete once add existed, and closes an otherwise-incomplete CRUD
+   surface.
+2. **Undo-last-transaction** -- reuses `TransactionLog`'s existing
+   traversal machinery, genuinely useful, and demonstrates careful state
+   reversal (see above).
+3. **A background auto-save thread** using `std::thread`, `std::mutex`, and
+   `std::atomic<bool>` (see below) -- the most substantial addition,
+   directly named in the assignment's own list of optional extensions, and
+   the one most likely to demonstrate advanced C++ concepts beyond the
+   baseline CRUD-and-reports shape.
+
+This keeps the "small scope + excellent implementation" principle intact
+(all 18 tests still pass, zero compiler warnings) while giving the project
+enough substance that it is no longer reasonably describable as too narrow.
+
+## Background auto-save: concurrency design
+
+`InventoryManager` owns:
+- `std::mutex mutex_` -- guards `products_`, `suppliers_`, and
+  `transactionLog_`. Every public method takes this lock for its duration.
+- `std::atomic<bool> dirty_` -- set to `true` by every mutating operation
+  (`markDirtyLocked()`), and atomically read-and-cleared
+  (`dirty_.exchange(false)`) by the background thread each time it wakes.
+- `std::atomic<bool> autoSaveRunning_` and `std::thread autoSaveThread_` --
+  the thread's lifecycle.
+
+`startAutoSave(intervalMs)` launches a thread running `autoSaveLoop`: it
+sleeps for `intervalMs`, then checks the dirty flag. If set, it takes
+`mutex_` and calls the same `saveLocked()` used by the explicit `save()`
+path, so the file format and the atomic-write guarantee (see below) are
+identical whether the save was triggered manually or by the background
+thread. `stopAutoSave()` (called both by "Save & exit" and by the
+destructor) stops the loop, joins the thread, and performs one final
+synchronous save if anything is still unflushed -- so no work is ever lost
+even if the process exits immediately after a mutation.
+
+This design deliberately keeps the locking coarse-grained (a single mutex
+over all inventory state) rather than fine-grained per-collection locking:
+the operation volumes here do not justify the added complexity and risk of
+a more elaborate locking scheme, and coarse-grained locking is easier to
+reason about correctly -- which matters more for a portfolio project
+demonstrating correct concurrency than for one demonstrating maximum
+throughput. Verified by
+`test_auto_save_thread_persists_without_manual_save`, which starts the
+thread, mutates state, and confirms (by reading the file directly, without
+ever calling `save()`) that the background thread alone persisted the
+change.
+
+## File format
+
+Pipe-delimited flat file with three bracketed sections:
+
+```
+[PRODUCTS]
+id|name|category|quantity|sellingPrice|costPrice|reorderThreshold|supplierId
+[SUPPLIERS]
+id|name|contact
+[TRANSACTIONS]
+id|productId|IN|OUT|quantity|timestamp|note
+```
+
+`Transaction.quantity` is always a non-negative magnitude; direction is
+carried by the `IN`/`OUT` token, not by quantity's sign. This matches the
+documented Product definition and avoids the earlier Phase 1 inconsistency
+between a signed-delta convention in one section and a magnitude-plus-type
+convention in the file-format table.
+
+## Persistence: atomic writes
+
+`FileHandler::saveToFile` writes the full content to `path + ".tmp"` first,
+checks the stream is still `good()`, and only then uses `std::rename` to
+atomically replace the original file. `std::rename` on the same filesystem
+is atomic at the OS level -- a crash or interruption during the write can
+never leave `inventory.dat` half-written or corrupted; the original file is
+either left completely untouched (if the temp write failed) or completely
+replaced (if it succeeded). On a failed write, the temp file is removed.
+
+## Persistence: malformed-line handling
+
+`FileHandler::loadFromFile` parses each line inside its current section and
+increments `malformedLinesSkipped` (returned by reference) for any line that
+does not parse -- wrong field count, or a field that fails numeric
+conversion -- rather than aborting the load. `main.cpp` prints a warning at
+startup if this count is greater than zero. Verified by
+`test_malformed_lines_are_counted` and
+`test_persistence_round_trip_and_malformed_line`.
+
+## Toolchain and testing
+
+C++17, CMake 3.10+, GCC/Clang/MSVC, Git/GitHub. Assert-based unit tests (no
+external framework) in `tests/test_inventory.cpp`: 18 tests covering
+product operations, supplier CRUD, transaction processing, undo,
+persistence (round-trip, malformed lines, atomic write), validation, and
+the background auto-save thread. All pass; the project builds with zero
+warnings under `-Wall -Wextra`.
+
+## References
+
+- Hunt, A., & Thomas, D. (2019). *The Pragmatic Programmer* (20th
+  Anniversary ed.). Addison-Wesley.
+- Anggoro, W. (2018). *C++ Data Structures and Algorithms.* Packt
+  Publishing.
+- ISO/IEC. (2017). *ISO/IEC 14882:2017 -- Programming languages: C++.*
+  International Organization for Standardization.
+- cppreference.com. (n.d.). *std::thread, std::mutex, std::atomic.*
+  Retrieved from https://en.cppreference.com/

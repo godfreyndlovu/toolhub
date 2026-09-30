@@ -1,18 +1,22 @@
-#ifndef SHOPTRACK_TRANSACTION_LOG_H
-#define SHOPTRACK_TRANSACTION_LOG_H
+#pragma once
 
-#include "transaction.h"
 #include <functional>
+#include <cstddef>
+#include "transaction.h"
 
-// A hand-built singly linked list of Transactions, using raw pointers.
-// Chosen over std::vector because the access pattern is append-only,
-// sequential-read (never random-indexed) -- this is the module's
-// deliberate demonstration of manual pointer/memory management.
+// Hand-built singly linked list of Transactions, using raw pointers.
 //
-// TransactionLog owns every node it allocates. The destructor walks
-// the chain and frees each node; copy construction/assignment perform
-// a deep copy, since a shallow copy of raw pointers would cause a
-// double-free when both copies are destroyed (rule of three).
+// This is a deliberate C/C++ competency demonstration: transaction history is
+// append-only and read sequentially, a pattern std::vector would also serve
+// well. The linked list is chosen specifically to exercise dynamic memory
+// allocation, pointer traversal, ownership, and manual destruction -- the
+// module's core memory-model competency -- rather than because it is
+// technically necessary here.
+//
+// TransactionLog owns every node it allocates via `new`. The destructor walks
+// the chain and `delete`s each node. Copy construction and copy assignment
+// perform a deep copy of the chain (rule of three) so that two independently
+// destroyed logs never double-free the same node.
 class TransactionLog {
 public:
     TransactionLog() = default;
@@ -21,30 +25,32 @@ public:
     TransactionLog(const TransactionLog& other);
     TransactionLog& operator=(const TransactionLog& other);
 
-    // Appends a copy of the transaction to the end of the list. O(1)
-    // via the tail pointer.
+    // Appends a copy of t to the end of the chain. O(1) via a tracked tail
+    // pointer.
     void append(const Transaction& t);
 
-    // Calls fn(const Transaction&) for every entry, in insertion order.
-    // Used by Reports functions to build read-only views without
-    // exposing the internal node structure.
+    // Removes the last transaction in the chain (if any) and copies its data
+    // into `out`. O(n) -- must walk to find the node before the tail, since
+    // this is a singly linked list. Used only for the single-level "undo
+    // last transaction" feature, which is not performance-sensitive.
+    bool removeLast(Transaction& out);
+
+    // Calls fn(t) for every transaction, in insertion order. O(n).
     void forEach(const std::function<void(const Transaction&)>& fn) const;
 
     std::size_t size() const { return size_; }
-    bool empty() const { return head_ == nullptr; }
+    bool empty() const { return size_ == 0; }
 
 private:
-    struct TransactionNode {
+    struct Node {
         Transaction data;
-        TransactionNode* next = nullptr;
+        Node* next = nullptr;
     };
 
-    TransactionNode* head_ = nullptr;
-    TransactionNode* tail_ = nullptr;
+    Node* head_ = nullptr;
+    Node* tail_ = nullptr;
     std::size_t size_ = 0;
 
-    void clear();
     void copyFrom(const TransactionLog& other);
+    void clear();
 };
-
-#endif // SHOPTRACK_TRANSACTION_LOG_H
