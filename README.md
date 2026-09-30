@@ -1,4 +1,4 @@
-# ToolHub
+# ToolHub 🛠️
 
 A C++17 command-line inventory management application, built for the IU
 module *Project: General Programming with C/C++* (DLBMINPAPCC01_E), Task 3:
