@@ -1,0 +1,8 @@
+build/
+toolhub_tests
+inventory.dat
+*.o
+.vscode/
+.idea/
+.vs/
+out/

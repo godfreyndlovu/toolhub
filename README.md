@@ -1,0 +1,173 @@
+# ToolHub 🛠️
+
+A C++17 command-line inventory management application, built for the IU
+module *Project: General Programming with C/C++* (DLBMINPAPCC01_E), Task 3:
+Smart Inventory Management System.
+
+Godfrey Ndlovu -- Matriculation No. 92131458
+
+## Problem, purpose, solution ♟️
+
+Small shops routinely lose track of stock through manual methods -- a paper
+ledger or a spreadsheet nobody updates consistently -- which leads to running
+out of fast-moving items unnoticed and having no reliable record of why
+stock levels changed. ToolHub gives a small shop owner a single, reliable
+tool to track what they stock, who supplies it, and how it moves, while
+using the implementation to demonstrate the module's core C/C++
+competencies: structured program organisation, correct use of pointers and
+manual memory management, deliberate data-structure selection, and modern
+C++ syntax applied to a real, non-trivial problem.
+
+The user manages the shop's inventory entirely through an **interactive CLI
+menu** (`src/main.cpp`), which is the sole entry point to every operation
+described below -- there is no other way to use the application, and no
+functionality exists that the user cannot reach through this interface.
+
+## What it does❓
+
+**Products:** add / edit / remove; every editable field except quantity can
+be changed (quantity only ever changes through a recorded transaction, so
+every quantity change leaves an audit trail).
+
+**Suppliers:** add / edit / remove. Removing a supplier does not remove the
+products that reference it -- those products are reset to "no supplier"
+rather than left pointing at an id that no longer exists.
+
+**Transactions:** record stock-in / stock-out movements against a product,
+with quantity, timestamp, and a note. **Undo last transaction** reverses the
+single most recent transaction (both its effect on quantity and the record
+itself) -- a deliberate single-level undo, not a full undo stack.
+
+**Search & sort:** search products by name (case-insensitive substring);
+sort by name, quantity, or price.
+
+**Reports:** low-stock report (ranked by shortfall, most urgent first);
+transaction history (resolves product names, including a
+`(deleted product #id)` placeholder for transactions against a since-removed
+product).
+
+**Persistence:** a pipe-delimited flat file (`inventory.dat`), written
+atomically (temp file + rename) so an interrupted save can never corrupt the
+file. Malformed lines on load are skipped and counted, not fatal.
+
+**Background auto-save:** a `std::thread` wakes periodically, checks an
+`std::atomic<bool>` dirty flag set by every mutating operation, and flushes
+to disk under the same `std::mutex` the main thread uses -- so work is
+persisted within a few seconds even if the user forgets to choose
+"Save & exit". See `docs/sequence_diagram.png` for the full interaction,
+and CODEBOOK.md for why this was added.
+
+## Architecture 🖥️
+
+```
+Product, Supplier, Transaction, TransactionLog   -- data layer
+InventoryManager, Reports                        -- logic layer
+FileHandler                                       -- persistence
+main.cpp (CLI)                                    -- interface layer
+tests/test_inventory.cpp                          -- testing
+```
+
+See `docs/architecture_diagram.png` for the layered module view above drawn
+out as a diagram, `docs/class_diagram.png` for the full class diagram
+(proper UML notation: composition, association, dependency -- no
+inheritance anywhere, since nothing in this design inherits from anything)
+and `docs/sequence_diagram.png` for a recorded-transaction / auto-save
+interaction sequence.
+
+## Build & run ⚙️
+
+Requires a C++17 compiler, CMake 3.10+, and a threading library (pthreads on
+Linux/macOS; native threads on Windows via MSVC). No other external
+dependencies.
+
+```
+cmake -B build -S .
+cmake --build build
+./build/toolhub          # run the application
+./build/toolhub_tests    # run the unit tests
+```
+
+On Windows/Visual Studio, open the folder or generated solution and build
+the `toolhub` and `toolhub_tests` targets from there; the same CMakeLists.txt
+is used.
+
+## Menu reference 📲
+
+```
+ 1) Add product              8) Remove supplier
+ 2) Edit product              9) Record transaction
+ 3) Remove product           10) Undo last transaction
+ 4) Search products          11) Low-stock report
+ 5) Sort & list products     12) Transaction history
+ 6) Add supplier             13) List all products
+ 7) Edit supplier             0) Save & exit
+```
+
+## Seed data 👾
+
+On first run, if no `inventory.dat` exists, the application starts
+genuinely empty -- it does not auto-populate any data. For demonstration and
+testing purposes, a fixed example dataset is entered manually through the
+CLI (see the demonstration video and `tests/test_persistence_round_trip_and_malformed_line`):
+one supplier (Saunders Hardware Ltd) and one product (Claw Hammer, quantity
+24, reorder threshold 5), with one recorded stock-out transaction reducing
+quantity to 21. This dataset is not auto-generated by the code -- it exists
+solely to give reviewers a consistent, reproducible example to follow.
+
+## File format 📁
+
+```
+[PRODUCTS]
+id|name|category|quantity|sellingPrice|costPrice|reorderThreshold|supplierId
+[SUPPLIERS]
+id|name|contact
+[TRANSACTIONS]
+id|productId|IN|OUT|quantity|timestamp|note
+```
+
+## Edge cases handled (see tests/test_inventory.cpp) 🧪
+
+- Empty inventory: reports/search/sort return cleanly, no crash
+- Invalid input: CLI re-prompts, never crashes
+- Duplicate product names: allowed, with confirmation prompt
+- Stock-out below zero: rejected, quantity unchanged
+- Malformed persisted line: skipped and counted, load continues
+- Unknown supplier reference: rejected on add/edit
+- Removed supplier: referencing products reset to "no supplier", not left dangling
+- Removed product: historical transactions kept, displayed with a placeholder name
+- Undo with no transactions: rejected cleanly
+- Undo referencing a since-removed product: transaction still undone; no quantity to reverse
+- Interrupted save: atomic write means the original file is never partially overwritten
+
+## Toolchain and testing
+
+C++17, CMake, GCC/Clang/MSVC, Git/GitHub. Testing uses C++ `assert`-based
+unit tests (no external framework) covering product operations, transaction
+processing, supplier CRUD, undo, persistence, validation, and the
+background auto-save thread -- 18 tests total, all passing, zero compiler
+warnings under `-Wall -Wextra`.
+
+## Changes from Phase 1
+
+1. `Transaction` stores quantity as a non-negative magnitude with a
+   `TransactionType` (IN/OUT), matching the documented file format, rather
+   than a signed delta.
+2. `editProduct` was extended to cover every editable field
+   (name/category/sellingPrice/costPrice/reorderThreshold/supplierId);
+   quantity remains intentionally excluded (see CODEBOOK.md).
+3. Supplier references are validated: `addProduct`/`editProduct` reject an
+   unknown `supplierId`.
+4. Persistence is atomic (temp file + rename) and malformed lines are
+   counted and reported to the user at startup, rather than only skipped
+   silently.
+5. **Scope was extended** in direct response to conception-phase review
+   feedback that the original baseline was too narrow: full supplier
+   management (edit/remove, not just add), undo-last-transaction, and a
+   background auto-save thread using `std::thread`/`std::mutex`/`std::atomic`
+   were added as implemented features rather than left as optional
+   extensions. See CODEBOOK.md, "Scope extension" section, for the
+   reasoning.
+6. The UML diagram was rebuilt as a proper class diagram plus a sequence
+   diagram, replacing an earlier component-style sketch that used a plain
+   arrow between `User` and `CLI` that could be misread as an inheritance
+   relationship. Nothing in this design inherits from anything.
